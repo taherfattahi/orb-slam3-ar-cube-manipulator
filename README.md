@@ -29,7 +29,7 @@ Camera Input → Hand Gesture Detector → ROS Topics → AR Visualizer → Disp
 ```
 
 ## Dependencies
-- ROS (Robot Operating System)
+- ROS-Melodic (Robot Operating System)
 - OpenCV 3.x
 - MediaPipe
 - ORB-SLAM3
