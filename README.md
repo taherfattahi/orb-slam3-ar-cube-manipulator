@@ -80,9 +80,6 @@ These files implement the augmented reality visualization, including:
 - Mapping 2D gestures to 3D transformations
 - Visual status information overlay
 
-## License
-This project is released under the MIT License. Feel free to use, modify, and distribute for your own projects.
-
 ## Acknowledgements
 - ORB-SLAM3: https://github.com/UZ-SLAMLab/ORB_SLAM3
 - MediaPipe: https://ai.google.dev/edge/mediapipe/solutions/guide
