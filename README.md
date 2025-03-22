@@ -29,7 +29,7 @@ Camera Input → Hand Gesture Detector → ROS Topics → AR Visualizer → Disp
 ```
 
 ## Dependencies
-- ROS (Robot Operating System)
+- ROS-Melodic (Robot Operating System)
 - OpenCV 3.x
 - MediaPipe
 - ORB-SLAM3
@@ -79,9 +79,6 @@ These files implement the augmented reality visualization, including:
 - 3D cube rendering and manipulation
 - Mapping 2D gestures to 3D transformations
 - Visual status information overlay
-
-## License
-This project is released under the MIT License. Feel free to use, modify, and distribute for your own projects.
 
 ## Acknowledgements
 - ORB-SLAM3: https://github.com/UZ-SLAMLab/ORB_SLAM3
