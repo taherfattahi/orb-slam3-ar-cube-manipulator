@@ -499,7 +499,7 @@ cv::Mat ViewerAR::MapPinchTo3D(const float pinchX, const float pinchY, Plane* pP
     cv::Mat ray = cv::Mat::ones(3, 1, CV_32F);
     ray.at<float>(0) = ((pinchX - 0.5) * MOVEMENT_SCALE) * -1;  // Center and scale x
     ray.at<float>(1) = ((pinchY - 0.5) * MOVEMENT_SCALE) * -1;  // Center and scale y
-    gi
+    
     // Transform ray to world coordinates (using current camera pose)
     cv::Mat Rwc = mTcw.rowRange(0,3).colRange(0,3).t();
     ray = Rwc * ray;
