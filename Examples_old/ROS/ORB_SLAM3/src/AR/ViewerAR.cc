@@ -50,7 +50,15 @@ cv::Mat ExpSO3(const cv::Mat &v)
     return ExpSO3(v.at<float>(0),v.at<float>(1),v.at<float>(2));
 }
 
-ViewerAR::ViewerAR(){}
+ViewerAR::ViewerAR() : mbPinchActive(false), mbRotationPinchActive(false), mbCubeInitialized(false), mpActivePlane(NULL)
+{
+    mPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    mLastPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    mRotationPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    mLastRotationPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    mCubePosition = cv::Mat::zeros(3, 1, CV_32F);
+    mCubeRotation = cv::Mat::zeros(3, 1, CV_32F); // Initialize rotation as 0 around all axes
+}
 
 void ViewerAR::Run()
 {
@@ -161,6 +169,8 @@ void ViewerAR::Run()
                         delete vpPlane[i];
                     }
                     vpPlane.clear();
+                    mpActivePlane = NULL;
+                    mbCubeInitialized = false;
                     cout << "All cubes erased!" << endl;
                 }
                 menu_clear = false;
@@ -172,6 +182,11 @@ void ViewerAR::Run()
                 {
                     cout << "New virtual cube inserted!" << endl;
                     vpPlane.push_back(pPlane);
+                    mpActivePlane = pPlane;
+                    
+                    // Initialize cube at the center of the plane
+                    mCubePosition = pPlane->o.clone();
+                    mbCubeInitialized = true;
                 }
                 else
                 {
@@ -194,6 +209,48 @@ void ViewerAR::Run()
                     }
                 }
 
+                // Check if we need to update cube position based on pinch gesture
+                {
+                    unique_lock<mutex> lock(mMutexPinch);
+                    
+                    // Direct manipulation using SetPinchGesture instead of updating here
+                    // The SetPinchGesture method now handles the movement logic
+                    
+                    // Additional debug for active plane
+                    if (mpActivePlane)
+                    {
+                        string planeInfo = "Active plane origin: " + 
+                                          to_string(mpActivePlane->o.at<float>(0)) + 
+                                          ", " + to_string(mpActivePlane->o.at<float>(1)) + 
+                                          ", " + to_string(mpActivePlane->o.at<float>(2));
+                        AddTextToImage(planeInfo, im, 255, 165, 0);
+                    }
+                    else
+                    {
+                        AddTextToImage("No active plane detected", im, 255, 0, 0);
+                    }
+                }
+                
+                // Check for rotation pinch gesture
+                {
+                    unique_lock<mutex> lock(mMutexRotationPinch);
+                    if (mbRotationPinchActive)
+                    {
+                        string s = "Rotation Pinch Active: " + to_string(mRotationPinchPosition.at<float>(0)) + 
+                                  ", " + to_string(mRotationPinchPosition.at<float>(1));
+                        AddTextToImage(s, im, 255, 0, 255);
+                        
+                        // Add cube rotation info
+                        if (mbCubeInitialized)
+                        {
+                            string rotInfo = "Cube Rotation: " + to_string(mCubeRotation.at<float>(0)) + 
+                                          ", " + to_string(mCubeRotation.at<float>(1)) + 
+                                          ", " + to_string(mCubeRotation.at<float>(2));
+                            AddTextToImage(rotInfo, im, 255, 0, 255);
+                        }
+                    }
+                }
+
                 for(size_t i=0; i<vpPlane.size(); i++)
                 {
                     Plane* pPlane = vpPlane[i];
@@ -204,14 +261,9 @@ void ViewerAR::Run()
                         {
                             pPlane->Recompute();
                         }
+                        
                         glPushMatrix();
                         pPlane->glTpw.Multiply();
-
-                        // Draw cube
-                        if(menu_drawcube)
-                        {
-                            DrawCube(menu_cubesize);
-                        }
 
                         // Draw grid plane
                         if(menu_drawgrid)
@@ -222,15 +274,71 @@ void ViewerAR::Run()
                         glPopMatrix();
                     }
                 }
+                
+                // Draw the cube at its current position if initialized
+                if (mbCubeInitialized && menu_drawcube && mpActivePlane)
+                {
+                    glPushMatrix();
+                    mpActivePlane->glTpw.Multiply();
+                    
+                    // Convert from world coordinates to plane-relative coordinates
+                    cv::Mat planeRelativePos = mpActivePlane->Tpw.rowRange(0,3).colRange(0,3) * 
+                                              (mCubePosition - mpActivePlane->o);
+                    
+                    // Print cube position for debugging
+                    cout << "Drawing cube at plane-relative position: " 
+                         << planeRelativePos.at<float>(0) << ", "
+                         << planeRelativePos.at<float>(1) << ", "
+                         << planeRelativePos.at<float>(2) << endl;
+                    
+                    // Draw a bigger cube for better visibility
+                    float cubeSize = menu_cubesize * 1.5;
+                    
+                    // Draw the main cube
+                    DrawCube(cubeSize, 
+                            planeRelativePos.at<float>(0),
+                            planeRelativePos.at<float>(1), 
+                            planeRelativePos.at<float>(2));
+                    
+                    glPopMatrix();
+                    
+                    // Add visual indicator of cube position on the image
+                    if (!mTcw.empty())
+                    {
+                        // Project 3D cube position to 2D image
+                        cv::Mat Rcw = mTcw.rowRange(0,3).colRange(0,3);
+                        cv::Mat tcw = mTcw.rowRange(0,3).col(3);
+                        
+                        // World point to camera coords
+                        cv::Mat Pc = Rcw*mCubePosition + tcw;
+                        
+                        // Camera coords to image
+                        if (Pc.at<float>(2) > 0)  // Check if point is in front of camera
+                        {
+                            float invZ = 1.0f/Pc.at<float>(2);
+                            float u = fx*Pc.at<float>(0)*invZ + cx;
+                            float v = fy*Pc.at<float>(1)*invZ + cy;
+                            
+                            // Draw a prominent marker at the projected cube position
+                            if (u >= 0 && u < im.cols && v >= 0 && v < im.rows)
+                            {
+                                cv::circle(im, cv::Point(u, v), 15, cv::Scalar(0, 0, 255), -1);
+                                cv::circle(im, cv::Point(u, v), 17, cv::Scalar(255, 255, 255), 2);
+                                
+                                // Add text label
+                                cv::putText(im, "CUBE", cv::Point(u+20, v), 
+                                            cv::FONT_HERSHEY_SIMPLEX, 0.7, 
+                                            cv::Scalar(0, 0, 255), 2);
+                            }
+                        }
+                    }
+                }
             }
-
-
         }
 
         pangolin::FinishFrame();
         usleep(mT*1000);
     }
-
 }
 
 void ViewerAR::SetImagePose(const cv::Mat &im, const cv::Mat &Tcw, const int &status, const vector<cv::KeyPoint> &vKeys, const vector<ORB_SLAM3::MapPoint*> &vMPs)
@@ -251,6 +359,208 @@ void ViewerAR::GetImagePose(cv::Mat &im, cv::Mat &Tcw, int &status, std::vector<
     status = mStatus;
     vKeys = mvKeys;
     vMPs = mvMPs;
+}
+
+void ViewerAR::SetPinchGesture(const bool isPinching, const float x, const float y, const float z)
+{
+    unique_lock<mutex> lock(mMutexPinch);
+    
+    // Check if we're transitioning from not pinching to pinching
+    bool startingPinch = !mbPinchActive && isPinching;
+    
+    // Update pinch state
+    mbPinchActive = isPinching;
+    
+    if (isPinching)
+    {
+        // Update pinch position
+        mPinchPosition.at<float>(0) = x;
+        mPinchPosition.at<float>(1) = y;
+        mPinchPosition.at<float>(2) = z;
+        
+        // If we have an active plane and a cube is initialized
+        if (mpActivePlane && mbCubeInitialized)
+        {
+            // First pinch - store the initial position for reference
+            if (startingPinch)
+            {
+                mLastPinchPosition = MapPinchTo3D(x, y, mpActivePlane);
+                cout << "Starting pinch at: " << x << ", " << y << endl;
+            }
+            else if (!mLastPinchPosition.empty() && cv::norm(mLastPinchPosition) > 0)
+            {
+                // Direct cube movement - more reliable than differential movement
+                cv::Mat newPosition = MapPinchTo3D(x, y, mpActivePlane);
+                cv::Mat delta = newPosition - mLastPinchPosition;
+                
+                // Apply movement to cube
+                mCubePosition += delta;
+                
+                // Update last position
+                mLastPinchPosition = newPosition.clone();
+                
+                cout << "Moving cube by: " << delta.at<float>(0) << ", " 
+                     << delta.at<float>(1) << ", " 
+                     << delta.at<float>(2) << endl;
+            }
+        }
+    }
+    else
+    {
+        // Reset last pinch position when not pinching
+        mLastPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    }
+}
+
+void ViewerAR::SetRotationPinchGesture(const bool isRotationPinching, const float x, const float y, const float z)
+{
+    unique_lock<mutex> lock(mMutexRotationPinch);
+    
+    // Check if we're transitioning from not pinching to pinching
+    bool startingRotationPinch = !mbRotationPinchActive && isRotationPinching;
+    
+    // Update pinch state
+    mbRotationPinchActive = isRotationPinching;
+    
+    if (isRotationPinching)
+    {
+        // Update rotation pinch position
+        mRotationPinchPosition.at<float>(0) = x;
+        mRotationPinchPosition.at<float>(1) = y;
+        mRotationPinchPosition.at<float>(2) = z;
+        
+        // If we have an active plane and a cube is initialized
+        if (mpActivePlane && mbCubeInitialized)
+        {
+            // First pinch - store the initial position for reference
+            if (startingRotationPinch)
+            {
+                mLastRotationPinchPosition = mRotationPinchPosition.clone();
+                cout << "Starting rotation pinch at: " << x << ", " << y << endl;
+            }
+            else if (!mLastRotationPinchPosition.empty() && cv::norm(mLastRotationPinchPosition) > 0)
+            {
+                // Calculate rotation based on 2D pinch movement
+                cv::Mat rotation = MapRotationPinch(x, y, mpActivePlane);
+                
+                // Apply rotation to cube
+                mCubeRotation.at<float>(0) += rotation.at<float>(0); // Roll
+                mCubeRotation.at<float>(1) += rotation.at<float>(1); // Pitch
+                mCubeRotation.at<float>(2) += rotation.at<float>(2); // Yaw
+                
+                // Update last position
+                mLastRotationPinchPosition = mRotationPinchPosition.clone();
+                
+                cout << "Rotating cube by: " << rotation.at<float>(0) << ", " 
+                     << rotation.at<float>(1) << ", " 
+                     << rotation.at<float>(2) << endl;
+            }
+        }
+    }
+    else
+    {
+        // Reset last rotation pinch position when not pinching
+        mLastRotationPinchPosition = cv::Mat::zeros(3, 1, CV_32F);
+    }
+}
+
+void ViewerAR::MoveCube(const float x, const float y, const float z)
+{
+    if (mbCubeInitialized)
+    {
+        mCubePosition.at<float>(0) += x;
+        mCubePosition.at<float>(1) += y;
+        mCubePosition.at<float>(2) += z;
+    }
+}
+
+void ViewerAR::RotateCube(const float rx, const float ry, const float rz)
+{
+    if (mbCubeInitialized)
+    {
+        mCubeRotation.at<float>(0) += rx;
+        mCubeRotation.at<float>(1) += ry;
+        mCubeRotation.at<float>(2) += rz;
+    }
+}
+
+cv::Mat ViewerAR::MapPinchTo3D(const float pinchX, const float pinchY, Plane* pPlane)
+{
+    if (!pPlane)
+        return cv::Mat::zeros(3, 1, CV_32F);
+    
+    // Use a simplified approach for more direct mapping
+    // This makes movements larger and more noticeable
+    
+    // Create ray direction from camera center through pinch point
+    // Amplify the movement by scaling the pinch coordinates
+    const float MOVEMENT_SCALE = 1.5; // Increase this value to make movements more obvious
+    
+    cv::Mat ray = cv::Mat::ones(3, 1, CV_32F);
+    ray.at<float>(0) = ((pinchX - 0.5) * MOVEMENT_SCALE) * -1;  // Center and scale x
+    ray.at<float>(1) = ((pinchY - 0.5) * MOVEMENT_SCALE) * -1;  // Center and scale y
+    gi
+    // Transform ray to world coordinates (using current camera pose)
+    cv::Mat Rwc = mTcw.rowRange(0,3).colRange(0,3).t();
+    ray = Rwc * ray;
+    
+    // Get camera position in world coordinates
+    cv::Mat Ow = -Rwc * mTcw.rowRange(0,3).col(3);
+    
+    // Project movement onto the plane
+    cv::Mat planeNormal = pPlane->n;
+    
+    // Calculate a point on the plane (we'll use the origin of the plane)
+    cv::Mat pointOnPlane = pPlane->o;
+    
+    // Project ray onto plane to get movement direction on the plane
+    cv::Mat projectedRay = ray - (planeNormal * (ray.dot(planeNormal)));
+    
+    // Normalize and scale the projected ray for consistent movement
+    float projNorm = cv::norm(projectedRay);
+    if (projNorm > 0)
+    {
+        projectedRay = projectedRay * (1.0 / projNorm) * 0.05; // Scale for appropriate movement speed
+    }
+    
+    // Log for debugging
+    std::cout << "Pinch coords: " << pinchX << ", " << pinchY << std::endl;
+    std::cout << "Projected ray: " << projectedRay.at<float>(0) << ", " 
+              << projectedRay.at<float>(1) << ", " 
+              << projectedRay.at<float>(2) << std::endl;
+    
+    // Return the current cube position plus the projected movement
+    // This ensures the cube moves relative to its current position
+    return mCubePosition + projectedRay;
+}
+
+cv::Mat ViewerAR::MapRotationPinch(const float pinchX, const float pinchY, Plane* pPlane)
+{
+    cv::Mat rotation = cv::Mat::zeros(3, 1, CV_32F);
+    
+    if (!pPlane || mLastRotationPinchPosition.empty())
+        return rotation;
+    
+    // Calculate deltas in pinch position
+    float deltaX = pinchX - mLastRotationPinchPosition.at<float>(0);
+    float deltaY = pinchY - mLastRotationPinchPosition.at<float>(1);
+    
+    // Scale factors for rotation (adjust these to control rotation sensitivity)
+    const float ROTATION_SCALE_X = 12.0;
+    const float ROTATION_SCALE_Y = 12.0;
+    const float ROTATION_SCALE_Z = 12.0;
+    
+    // Map x movement to yaw (rotation around vertical axis)
+    rotation.at<float>(2) = deltaX * ROTATION_SCALE_Z;
+    
+    // Map y movement to pitch (rotation around horizontal axis)
+    rotation.at<float>(1) = deltaY * ROTATION_SCALE_Y;
+    
+    // Roll can be controlled by additional gestures if needed
+    // Here we'll leave it at 0
+    rotation.at<float>(0) = 0.0f;
+    
+    return rotation;
 }
 
 void ViewerAR::LoadCameraPose(const cv::Mat &Tcw)
@@ -303,6 +613,46 @@ void ViewerAR::PrintStatus(const int &status, const bool &bLocMode, cv::Mat &im)
         case 3:  {AddTextToImage("LOCALIZATION LOST",im,255,0,0); break;}
         }
     }
+    
+    // Add pinch status info
+    {
+        unique_lock<mutex> lock(mMutexPinch);
+        if (mbPinchActive)
+        {
+            string s = "Pinch Active: " + to_string(mPinchPosition.at<float>(0)) + 
+                      ", " + to_string(mPinchPosition.at<float>(1));
+            AddTextToImage(s, im, 0, 255, 255);
+            
+            // Add cube position info
+            if (mbCubeInitialized && mpActivePlane)
+            {
+                string cubePos = "Cube Position: " + to_string(mCubePosition.at<float>(0)) + 
+                              ", " + to_string(mCubePosition.at<float>(1)) + 
+                              ", " + to_string(mCubePosition.at<float>(2));
+                AddTextToImage(cubePos, im, 0, 255, 0);
+            }
+        }
+    }
+    
+    // Add rotation pinch status info
+    {
+        unique_lock<mutex> lock(mMutexRotationPinch);
+        if (mbRotationPinchActive)
+        {
+            string s = "Rotation Pinch Active: " + to_string(mRotationPinchPosition.at<float>(0)) + 
+                      ", " + to_string(mRotationPinchPosition.at<float>(1));
+            AddTextToImage(s, im, 255, 0, 255);
+            
+            // Add cube rotation info
+            if (mbCubeInitialized)
+            {
+                string rotInfo = "Cube Rotation: " + to_string(mCubeRotation.at<float>(0)) + 
+                              ", " + to_string(mCubeRotation.at<float>(1)) + 
+                              ", " + to_string(mCubeRotation.at<float>(2));
+                AddTextToImage(rotInfo, im, 255, 0, 255);
+            }
+        }
+    }
 }
 
 void ViewerAR::AddTextToImage(const string &s, cv::Mat &im, const int r, const int g, const int b)
@@ -331,12 +681,33 @@ void ViewerAR::DrawImageTexture(pangolin::GlTexture &imageTexture, cv::Mat &im)
     }
 }
 
-void ViewerAR::DrawCube(const float &size,const float x, const float y, const float z)
+void ViewerAR::DrawCube(const float &size, const float x, const float y, const float z)
 {
-    pangolin::OpenGlMatrix M = pangolin::OpenGlMatrix::Translate(-x,-size-y,-z);
+    // Create a translation matrix for the cube position
+    pangolin::OpenGlMatrix M = pangolin::OpenGlMatrix::Translate(-x, -size-y, -z);
+    
+    // If we have rotation data and the cube is initialized, apply rotations
+    if (mbCubeInitialized)
+    {
+        // Get rotation angles from cube rotation state
+        float roll = mCubeRotation.at<float>(0);
+        float pitch = mCubeRotation.at<float>(1);
+        float yaw = mCubeRotation.at<float>(2);
+        
+        // Apply rotations in order: first roll, then pitch, then yaw
+        // This order matters! Different orders produce different final orientations
+        pangolin::OpenGlMatrix Rx = pangolin::OpenGlMatrix::RotateX(roll);
+        pangolin::OpenGlMatrix Ry = pangolin::OpenGlMatrix::RotateY(pitch);
+        pangolin::OpenGlMatrix Rz = pangolin::OpenGlMatrix::RotateZ(yaw);
+        
+        // Combine the rotations with the translation
+        M = M * Rz * Ry * Rx;
+    }
+    
+    // Apply the transformation and draw the cube
     glPushMatrix();
     M.Multiply();
-    pangolin::glDrawColouredCube(-size,size);
+    pangolin::glDrawColouredCube(-size, size);
     glPopMatrix();
 }
 
@@ -402,7 +773,7 @@ Plane* ViewerAR::DetectPlane(const cv::Mat Tcw, const std::vector<MapPoint*> &vM
         {
             if(pMP->Observations()>5)
             {
-                vPoints.push_back(pMP->GetWorldPos());
+                vPoints.push_back(ORB_SLAM3::Converter::toCvMat(pMP->GetWorldPos()));
                 vPointMP.push_back(pMP);
             }
         }
@@ -527,7 +898,7 @@ void Plane::Recompute()
         MapPoint* pMP = mvMPs[i];
         if(!pMP->isBad())
         {
-            cv::Mat Xw = pMP->GetWorldPos();
+            cv::Mat Xw = ORB_SLAM3::Converter::toCvMat(pMP->GetWorldPos());
             o+=Xw;
             A.row(nPoints).colRange(0,3) = Xw.t();
             nPoints++;

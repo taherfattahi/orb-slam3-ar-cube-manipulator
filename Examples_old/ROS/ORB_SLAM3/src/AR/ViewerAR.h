@@ -15,28 +15,25 @@
 * You should have received a copy of the GNU General Public License along with ORB-SLAM3.
 * If not, see <http://www.gnu.org/licenses/>.
 */
-
-
 #ifndef VIEWERAR_H
 #define VIEWERAR_H
-
 #include <mutex>
 #include <opencv2/core/core.hpp>
 #include <pangolin/pangolin.h>
 #include <string>
 #include"../../../include/System.h"
+#include <ros/ros.h>
+#include <geometry_msgs/Point.h>
+#include <std_msgs/Bool.h>
 
 namespace ORB_SLAM3
 {
-
 class Plane
 {
 public:
     Plane(const std::vector<MapPoint*> &vMPs, const cv::Mat &Tcw);
     Plane(const float &nx, const float &ny, const float &nz, const float &ox, const float &oy, const float &oz);
-
     void Recompute();
-
     //normal
     cv::Mat n;
     //origin
@@ -56,34 +53,34 @@ class ViewerAR
 {
 public:
     ViewerAR();
-
     void SetFPS(const float fps){
         mFPS = fps;
         mT=1e3/fps;
     }
-
     void SetSLAM(ORB_SLAM3::System* pSystem){
         mpSystem = pSystem;
     }
-
     // Main thread function. 
     void Run();
-
     void SetCameraCalibration(const float &fx_, const float &fy_, const float &cx_, const float &cy_){
         fx = fx_; fy = fy_; cx = cx_; cy = cy_;
     }
-
     void SetImagePose(const cv::Mat &im, const cv::Mat &Tcw, const int &status,
                       const std::vector<cv::KeyPoint> &vKeys, const std::vector<MapPoint*> &vMPs);
-
     void GetImagePose(cv::Mat &im, cv::Mat &Tcw, int &status,
                       std::vector<cv::KeyPoint> &vKeys,  std::vector<MapPoint*> &vMPs);
-
+    
+    // Methods for gesture handling
+    void SetPinchGesture(const bool isPinching, const float x, const float y, const float z);
+    void MoveCube(const float x, const float y, const float z);
+    
+    // Methods for rotation gesture handling
+    void SetRotationPinchGesture(const bool isRotationPinching, const float x, const float y, const float z);
+    void RotateCube(const float rx, const float ry, const float rz);
+    
 private:
-
     //SLAM
     ORB_SLAM3::System* mpSystem;
-
     void PrintStatus(const int &status, const bool &bLocMode, cv::Mat &im);
     void AddTextToImage(const std::string &s, cv::Mat &im, const int r=0, const int g=0, const int b=0);
     void LoadCameraPose(const cv::Mat &Tcw);
@@ -92,13 +89,17 @@ private:
     void DrawPlane(int ndivs, float ndivsize);
     void DrawPlane(Plane* pPlane, int ndivs, float ndivsize);
     void DrawTrackedPoints(const std::vector<cv::KeyPoint> &vKeys, const std::vector<MapPoint*> &vMPs, cv::Mat &im);
-
     Plane* DetectPlane(const cv::Mat Tcw, const std::vector<MapPoint*> &vMPs, const int iterations=50);
-
+    
+    // Map 2D pinch position to 3D plane coordinates
+    cv::Mat MapPinchTo3D(const float pinchX, const float pinchY, Plane* pPlane);
+    
+    // Map 2D rotation pinch movement to rotation angles
+    cv::Mat MapRotationPinch(const float pinchX, const float pinchY, Plane* pPlane);
+    
     // frame rate
     float mFPS, mT;
     float fx,fy,cx,cy;
-
     // Last processed image and computed pose by the SLAM
     std::mutex mMutexPoseImage;
     cv::Mat mTcw;
@@ -106,13 +107,28 @@ private:
     int mStatus;
     std::vector<cv::KeyPoint> mvKeys;
     std::vector<MapPoint*> mvMPs;
-
+    
+    // Translation pinch gesture state
+    std::mutex mMutexPinch;
+    bool mbPinchActive;
+    cv::Mat mPinchPosition;
+    cv::Mat mLastPinchPosition;
+    
+    // Rotation pinch gesture state
+    std::mutex mMutexRotationPinch;
+    bool mbRotationPinchActive;
+    cv::Mat mRotationPinchPosition;
+    cv::Mat mLastRotationPinchPosition;
+    
+    // Cube state
+    bool mbCubeInitialized;
+    cv::Mat mCubePosition;
+    
+    // Cube rotation state (Euler angles in radians)
+    cv::Mat mCubeRotation;
+    
+    // Active plane for cube movement
+    Plane* mpActivePlane;
 };
-
-
 }
-
-
 #endif // VIEWERAR_H
-	
-

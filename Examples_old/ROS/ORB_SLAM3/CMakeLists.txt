@@ -41,76 +41,83 @@ endif()
 find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
 
+# Find libmp.so
+find_library(LIBMP mp PATHS /home/taher/mediapipe/bazel-bin/mediapipe/examples/desktop/libmp)
+if(NOT LIBMP)
+  message(FATAL_ERROR "libmp not found in /home/taher/mediapipe/bazel-bin/mediapipe/examples/desktop/libmp")
+endif()	
+
+find_package(Protobuf REQUIRED)
+include_directories(${PROTOBUF_INCLUDE_DIRS})
+
 include_directories(
-${PROJECT_SOURCE_DIR}
-${PROJECT_SOURCE_DIR}/../../../
-${PROJECT_SOURCE_DIR}/../../../include
-${PROJECT_SOURCE_DIR}/../../../include/CameraModels
-${Pangolin_INCLUDE_DIRS}
+  ${PROJECT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/../../../
+  ${PROJECT_SOURCE_DIR}/../../../include
+  ${PROJECT_SOURCE_DIR}/../../../include/CameraModels
+  ${PROJECT_SOURCE_DIR}/../../../Thirdparty/Sophus
+  ${Pangolin_INCLUDE_DIRS}
+  /home/taher/mediapipe
+  /home/taher/mediapipe/mediapipe/examples/desktop/libmp
 )
 
 set(LIBS 
-${OpenCV_LIBS} 
-${EIGEN3_LIBS}
-${Pangolin_LIBRARIES}
-${PROJECT_SOURCE_DIR}/../../../Thirdparty/DBoW2/lib/libDBoW2.so
-${PROJECT_SOURCE_DIR}/../../../Thirdparty/g2o/lib/libg2o.so
-${PROJECT_SOURCE_DIR}/../../../lib/libORB_SLAM3.so
--lboost_system
+  ${OpenCV_LIBS} 
+  ${EIGEN3_LIBS}
+  ${Pangolin_LIBRARIES}
+  ${PROJECT_SOURCE_DIR}/../../../Thirdparty/DBoW2/lib/libDBoW2.so
+  ${PROJECT_SOURCE_DIR}/../../../Thirdparty/g2o/lib/libg2o.so
+  ${PROJECT_SOURCE_DIR}/../../../lib/libORB_SLAM3.so
+  -lboost_system
+  ${LIBMP}
+)
+
+# Custom target to copy MediaPipe resources
+add_custom_target(copy_mediapipe_resources
+  COMMAND ${CMAKE_COMMAND} -E copy_directory /home/taher/mediapipe/bazel-bin/mediapipe/modules ${CMAKE_BINARY_DIR}/modules
+  COMMAND ${CMAKE_COMMAND} -E copy_directory /home/taher/mediapipe/bazel-bin/mediapipe/models ${CMAKE_BINARY_DIR}/models
 )
 
 # Node for monocular camera
 rosbuild_add_executable(Mono
-src/ros_mono.cc
+  src/ros_mono.cc
 )
-
-target_link_libraries(Mono
-${LIBS}
-)
+target_link_libraries(Mono ${LIBS})
+add_dependencies(Mono copy_mediapipe_resources)
 
 # Node for monocular camera (Augmented Reality Demo)
 rosbuild_add_executable(MonoAR
-src/AR/ros_mono_ar.cc
-src/AR/ViewerAR.h
-src/AR/ViewerAR.cc
+  src/AR/ros_mono_ar.cc
+  src/AR/ViewerAR.h
+  src/AR/ViewerAR.cc
 )
-
-target_link_libraries(MonoAR
-${LIBS}
-)
+target_link_libraries(MonoAR ${LIBS})
+add_dependencies(MonoAR copy_mediapipe_resources)
 
 # Node for stereo camera
 rosbuild_add_executable(Stereo
-src/ros_stereo.cc
+  src/ros_stereo.cc
 )
-
-target_link_libraries(Stereo
-${LIBS}
-)
+target_link_libraries(Stereo ${LIBS})
+add_dependencies(Stereo copy_mediapipe_resources)
 
 # Node for RGB-D camera
 rosbuild_add_executable(RGBD
-src/ros_rgbd.cc
+  src/ros_rgbd.cc
 )
-
-target_link_libraries(RGBD
-${LIBS}
-)
+target_link_libraries(RGBD ${LIBS})
+add_dependencies(RGBD copy_mediapipe_resources)
 
 # Node for monocular-inertial camera
 rosbuild_add_executable(Mono_Inertial
-src/ros_mono_inertial.cc
+  src/ros_mono_inertial.cc
 )
-
-target_link_libraries(Mono_Inertial
-${LIBS}
-)
+target_link_libraries(Mono_Inertial ${LIBS})
+add_dependencies(Mono_Inertial copy_mediapipe_resources)
 
 # Node for stereo-inertial camera
 rosbuild_add_executable(Stereo_Inertial
-src/ros_stereo_inertial.cc
+  src/ros_stereo_inertial.cc
 )
-
-target_link_libraries(Stereo_Inertial
-${LIBS}
-)
+target_link_libraries(Stereo_Inertial ${LIBS})
+add_dependencies(Stereo_Inertial copy_mediapipe_resources)

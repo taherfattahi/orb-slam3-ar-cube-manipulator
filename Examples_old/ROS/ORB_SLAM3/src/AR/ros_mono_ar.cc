@@ -16,6 +16,9 @@
 * If not, see <http://www.gnu.org/licenses/>.
 */
 
+/**
+ *  Inspired by the amazing Tina
+ */
 
 #include<iostream>
 #include<algorithm>
@@ -24,6 +27,8 @@
 
 #include<ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
+#include <geometry_msgs/Point.h>
+#include <std_msgs/Bool.h>
 
 #include<opencv2/core/core.hpp>
 #include<opencv2/imgproc/imgproc.hpp>
@@ -48,8 +53,22 @@ public:
     ImageGrabber(ORB_SLAM3::System* pSLAM):mpSLAM(pSLAM){}
 
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
+    void GrabPinchActive(const std_msgs::Bool::ConstPtr& msg);
+    void GrabPinchPosition(const geometry_msgs::Point::ConstPtr& msg);
+    
+    // Methods for handling rotation pinch
+    void GrabRotationPinchActive(const std_msgs::Bool::ConstPtr& msg);
+    void GrabRotationPinchPosition(const geometry_msgs::Point::ConstPtr& msg);
 
     ORB_SLAM3::System* mpSLAM;
+    
+    // Translation pinch state
+    bool isPinching;
+    float pinchX, pinchY, pinchZ;
+    
+    // Rotation pinch state
+    bool isRotationPinching;
+    float rotationPinchX, rotationPinchY, rotationPinchZ;
 };
 
 int main(int argc, char **argv)
@@ -74,6 +93,8 @@ int main(int argc, char **argv)
     cout << "1) Translate the camera to initialize SLAM." << endl;
     cout << "2) Look at a planar region and translate the camera." << endl;
     cout << "3) Press Insert Cube to place a virtual cube in the plane. " << endl;
+    cout << "4) Use pinch gesture (thumb-index) to move the cube on the plane." << endl;
+    cout << "5) Use second pinch gesture (thumb-middle) to rotate the cube." << endl;
     cout << endl;
     cout << "You can place several cubes in different planes." << endl;
     cout << "-----------------------" << endl;
@@ -83,9 +104,32 @@ int main(int argc, char **argv)
     viewerAR.SetSLAM(&SLAM);
 
     ImageGrabber igb(&SLAM);
+    
+    // Initialize pinch states
+    igb.isPinching = false;
+    igb.pinchX = 0.0f;
+    igb.pinchY = 0.0f;
+    igb.pinchZ = 0.0f;
+    
+    igb.isRotationPinching = false;
+    igb.rotationPinchX = 0.0f;
+    igb.rotationPinchY = 0.0f;
+    igb.rotationPinchZ = 0.0f;
 
     ros::NodeHandle nodeHandler;
-    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    
+    // Subscribe to camera image
+    ros::Subscriber sub_image = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage, &igb);
+    
+    // Subscribe to pinch gesture topics
+    ros::Subscriber sub_pinch_active = nodeHandler.subscribe("/pinch_active", 1, &ImageGrabber::GrabPinchActive, &igb);
+    ros::Subscriber sub_pinch_position = nodeHandler.subscribe("/pinch_position", 1, &ImageGrabber::GrabPinchPosition, &igb);
+    
+    // Subscribe to rotation pinch gesture topics
+    ros::Subscriber sub_rotation_pinch_active = nodeHandler.subscribe("/rotation_pinch_active", 1, 
+                                                                    &ImageGrabber::GrabRotationPinchActive, &igb);
+    ros::Subscriber sub_rotation_pinch_position = nodeHandler.subscribe("/rotation_pinch_position", 1, 
+                                                                      &ImageGrabber::GrabRotationPinchPosition, &igb);
 
 
     cv::FileStorage fSettings(argv[2], cv::FileStorage::READ);
@@ -148,13 +192,20 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
     }
     cv::Mat im = cv_ptr->image.clone();
     cv::Mat imu;
-    cv::Mat Tcw = mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    
+    // Track frame with ORB-SLAM3
+    cv::Mat Tcw = ORB_SLAM3::Converter::toCvMat(mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec()).matrix());
+
     int state = mpSLAM->GetTrackingState();
     vector<ORB_SLAM3::MapPoint*> vMPs = mpSLAM->GetTrackedMapPoints();
     vector<cv::KeyPoint> vKeys = mpSLAM->GetTrackedKeyPointsUn();
 
     cv::undistort(im,imu,K,DistCoef);
 
+    // Update ViewerAR with both pinch states
+    viewerAR.SetPinchGesture(isPinching, pinchX, pinchY, pinchZ);
+    viewerAR.SetRotationPinchGesture(isRotationPinching, rotationPinchX, rotationPinchY, rotationPinchZ);
+    
     if(bRGB)
         viewerAR.SetImagePose(imu,Tcw,state,vKeys,vMPs);
     else
@@ -164,4 +215,61 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
     }    
 }
 
+void ImageGrabber::GrabPinchActive(const std_msgs::Bool::ConstPtr& msg)
+{
+    bool wasActive = isPinching;
+    isPinching = msg->data;
+    
+    // Debug output - more verbose
+    if (isPinching && !wasActive)
+        ROS_INFO("PINCH ACTIVATED - CUBE SHOULD START MOVING");
+    else if (!isPinching && wasActive)
+        ROS_INFO("PINCH DEACTIVATED - CUBE SHOULD STOP MOVING");
+}
 
+void ImageGrabber::GrabPinchPosition(const geometry_msgs::Point::ConstPtr& msg)
+{
+    // Update position even if not pinching to maintain latest hand position
+    pinchX = msg->x;
+    pinchY = msg->y;
+    pinchZ = msg->z;
+    
+    // Debug output
+    if (isPinching) {
+        ROS_INFO_THROTTLE(0.2, "ACTIVE PINCH - position: %.3f, %.3f, %.3f", pinchX, pinchY, pinchZ);
+    } else {
+        ROS_INFO_THROTTLE(1.0, "Hand position (no pinch): %.3f, %.3f, %.3f", pinchX, pinchY, pinchZ);
+    }
+    
+    // Force update the ViewerAR with current pinch state for instant feedback
+    viewerAR.SetPinchGesture(isPinching, pinchX, pinchY, pinchZ);
+}
+
+void ImageGrabber::GrabRotationPinchActive(const std_msgs::Bool::ConstPtr& msg)
+{
+    bool wasActive = isRotationPinching;
+    isRotationPinching = msg->data;
+    
+    // Debug output
+    if (isRotationPinching && !wasActive)
+        ROS_INFO("ROTATION PINCH ACTIVATED - CUBE SHOULD START ROTATING");
+    else if (!isRotationPinching && wasActive)
+        ROS_INFO("ROTATION PINCH DEACTIVATED - CUBE SHOULD STOP ROTATING");
+}
+
+void ImageGrabber::GrabRotationPinchPosition(const geometry_msgs::Point::ConstPtr& msg)
+{
+    // Update position even if not pinching to maintain latest hand position
+    rotationPinchX = msg->x;
+    rotationPinchY = msg->y;
+    rotationPinchZ = msg->z;
+    
+    // Debug output
+    if (isRotationPinching) {
+        ROS_INFO_THROTTLE(0.2, "ACTIVE ROTATION PINCH - position: %.3f, %.3f, %.3f", 
+                         rotationPinchX, rotationPinchY, rotationPinchZ);
+    }
+    
+    // Force update the ViewerAR with current rotation pinch state
+    viewerAR.SetRotationPinchGesture(isRotationPinching, rotationPinchX, rotationPinchY, rotationPinchZ);
+}
