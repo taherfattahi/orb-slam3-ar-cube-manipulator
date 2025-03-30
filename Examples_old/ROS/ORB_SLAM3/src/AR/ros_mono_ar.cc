@@ -16,10 +16,6 @@
 * If not, see <http://www.gnu.org/licenses/>.
 */
 
-/**
- *  Inspired by the amazing Tina
- */
-
 #include<iostream>
 #include<algorithm>
 #include<fstream>
